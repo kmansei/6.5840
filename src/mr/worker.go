@@ -9,6 +9,7 @@ import (
 	"net/rpc"
 	"os"
 	"sort"
+	"time"
 )
 
 // Map functions return a slice of KeyValue.
@@ -38,10 +39,12 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
 	// Your worker implementation here.
-	for {
-		reply := CallGetTask()
+	args := MRTask{Type: INIT}
 
-		if reply.Type == Map {
+	for {
+		reply := CallGetTask(&args)
+
+		if reply.Type == MAP {
 			fmt.Println(reply.File)
 
 			file, err := os.Open(reply.File)
@@ -77,7 +80,8 @@ func Worker(mapf func(string, string) []KeyValue,
 
 				ofile.Close()
 			}
-		} else if reply.Type == Reduce {
+			args = MRTask{Type: MAP, Id: reply.Id}
+		} else if reply.Type == REDUCE {
 			fmt.Printf("Reduce Id: %d\n", reply.Id)
 			fmt.Println(reply.Intermediates)
 
@@ -122,11 +126,11 @@ func Worker(mapf func(string, string) []KeyValue,
 
 				i = j
 			}
-
+			args = MRTask{Type: REDUCE, Id: reply.Id}
+		} else if reply.Type == SLEEP {
+			fmt.Println("sleeping...")
+			time.Sleep(500 * time.Millisecond)
 		}
-
-		//fmt.Println("sleeping...")
-		//time.Sleep(500 * time.Millisecond)
 	}
 
 	// uncomment to send the Example RPC to the coordinator.
@@ -134,11 +138,10 @@ func Worker(mapf func(string, string) []KeyValue,
 
 }
 
-func CallGetTask() MRTask {
-	args := ExampleArgs{}
+func CallGetTask(args *MRTask) MRTask {
 	reply := MRTask{}
 
-	ok := call("Coordinator.GetTask", &args, &reply)
+	ok := call("Coordinator.GetTask", args, &reply)
 	if !ok {
 		fmt.Printf("call Coordinator.GetTask failed!\n")
 		os.Exit(0)

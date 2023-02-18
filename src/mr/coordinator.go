@@ -10,49 +10,86 @@ import (
 	"sync"
 )
 
+type TaskStatus int
+
+const (
+	UNDONE TaskStatus = iota
+	EXECUTING
+	DONE
+)
+
 type MapTask struct {
-	id   int
-	file string //入力のファイル名
+	id     int
+	file   string //入力のファイル名
+	status TaskStatus
 }
 
 type ReduceTask struct {
-	id    int
-	files []string
+	id     int
+	files  []string
+	status TaskStatus
 }
 
 type Coordinator struct {
-	mtx         sync.Mutex
-	nReduce     int
-	mapTasks    []MapTask
-	reduceTasks []ReduceTask
+	mtx          sync.Mutex
+	nReduce      int
+	mapTasks     []MapTask
+	mapRemain    int  //割り振っていないmapタスク
+	mapDone      bool //map phaseが完了したか
+	reduceTasks  []ReduceTask
+	reduceRemain int //割り振っていないreduceタスク
+	reduceDone   bool
 }
 
 // Your code here -- RPC handlers for the worker to call.
-func (c *Coordinator) GetTask(args *ExampleArgs, reply *MRTask) error {
+func (c *Coordinator) GetTask(args *MRTask, reply *MRTask) error {
 	c.mtx.Lock()
-	fmt.Println("-------------")
-	fmt.Printf("c.mapTask: %d\n", len(c.mapTasks))
-	if len(c.mapTasks) > 0 {
+	defer c.mtx.Unlock()
 
-		//mapTasksをdeque
-		task := c.mapTasks[0]
-		c.mapTasks = c.mapTasks[1:]
+	//前回workerが行ったタスクをdoneにする
+	if args.Type == MAP {
+		c.mapTasks[args.Id].status = DONE
+	} else if args.Type == REDUCE {
+		c.reduceTasks[args.Id].status = DONE
+	}
 
-		reply.Type = Map
+	fmt.Println(c.mapRemain)
+	fmt.Println(c.mapDone)
+	fmt.Println(c.IsMapComplete())
+	if c.mapRemain > 0 {
+		task := c.chooseMapTask()
+
+		reply.Type = MAP
 		reply.File = task.file
 		reply.Id = task.id
 		reply.NReduce = c.nReduce
-	} else if len(c.mapTasks) == 0 && len(c.reduceTasks) > 0 {
-		task := c.reduceTasks[0]
-		c.reduceTasks = c.reduceTasks[1:]
 
-		reply.Type = Reduce
+		c.mapTasks[reply.Id].status = EXECUTING
+		c.mapRemain--
+	} else if c.mapRemain == 0 && c.reduceRemain > 0 {
+
+		//mapタスクがすべて終わるまでreduceを始めない
+		if c.mapDone = c.mapDone || c.IsMapComplete(); !c.mapDone {
+			reply.Type = SLEEP
+			return nil
+		}
+
+		task := c.chooseReduceTask()
+
+		reply.Type = REDUCE
 		reply.Intermediates = task.files
-
 		reply.Id = task.id
-		reply.NReduce = c.nReduce
+
+		c.reduceTasks[reply.Id].status = EXECUTING
+		c.reduceRemain--
+	} else if c.mapRemain == 0 && c.reduceRemain == 0 {
+		//reduceタスクが全て完了しているか
+		if !c.IsReduceComplete() {
+			reply.Type = SLEEP
+			return nil
+		}
+		c.reduceDone = true
 	}
-	c.mtx.Unlock()
 	return nil
 }
 
@@ -79,10 +116,46 @@ func (c *Coordinator) server() {
 	go http.Serve(l, nil)
 }
 
+// pre: c.mapRemain > 0
+func (c *Coordinator) chooseMapTask() MapTask {
+	for _, task := range c.mapTasks {
+		if task.status == UNDONE {
+			return task
+		}
+	}
+	return MapTask{}
+}
+
+// pre: c.reduceRemain > 0
+func (c *Coordinator) chooseReduceTask() ReduceTask {
+	for _, task := range c.reduceTasks {
+		if task.status == UNDONE {
+			return task
+		}
+	}
+	return ReduceTask{}
+}
+
+func (c *Coordinator) IsMapComplete() bool {
+	isComplete := true
+	for _, task := range c.mapTasks {
+		isComplete = isComplete && task.status == DONE
+	}
+	return isComplete
+}
+
+func (c *Coordinator) IsReduceComplete() bool {
+	isComplete := true
+	for _, task := range c.reduceTasks {
+		isComplete = isComplete && task.status == DONE
+	}
+	return isComplete
+}
+
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
-	ret := len(c.mapTasks) == 0 && len(c.reduceTasks) == 0
+	ret := c.mapDone && c.reduceDone
 
 	// Your code here.
 	return ret
@@ -92,16 +165,19 @@ func (c *Coordinator) Done() bool {
 // main/mrcoordinator.go calls this function.
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(inputFiles []string, n int) *Coordinator {
+	// Your code here.
 	c := Coordinator{
-		mapTasks:    make([]MapTask, len(inputFiles)),
-		reduceTasks: make([]ReduceTask, n),
+		nReduce:      n,
+		mapTasks:     make([]MapTask, len(inputFiles)),
+		mapRemain:    len(inputFiles),
+		mapDone:      false,
+		reduceTasks:  make([]ReduceTask, n),
+		reduceRemain: n,
+		reduceDone:   false,
 	}
 
-	// Your code here.
-	c.nReduce = n
-
 	for i, f := range inputFiles {
-		c.mapTasks[i] = MapTask{id: i, file: f}
+		c.mapTasks[i] = MapTask{id: i, file: f, status: UNDONE}
 	}
 
 	for r := 0; r < n; r++ {
@@ -110,7 +186,7 @@ func MakeCoordinator(inputFiles []string, n int) *Coordinator {
 			fileName := fmt.Sprintf("mr-%d-%d", m, r)
 			fs = append(fs, fileName)
 		}
-		c.reduceTasks[r] = ReduceTask{id: r, files: fs}
+		c.reduceTasks[r] = ReduceTask{id: r, files: fs, status: UNDONE}
 	}
 
 	c.server()

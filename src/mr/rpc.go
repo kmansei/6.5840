@@ -28,8 +28,10 @@ type ExampleReply struct {
 type TaskType int
 
 const (
-	Map TaskType = iota
-	Reduce
+	MAP TaskType = iota
+	REDUCE
+	SLEEP
+	INIT
 )
 
 type MRTask struct {
