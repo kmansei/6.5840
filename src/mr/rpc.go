@@ -33,10 +33,11 @@ const (
 )
 
 type MRTask struct {
-	Type    TaskType //Coordinatorにasignされたタスクタイプ
-	Id      int      //map or reduceのtask id
-	File    string
-	NReduce int
+	Type          TaskType //Coordinatorにasignされたタスクタイプ
+	Id            int      //map or reduceのtask id
+	File          string
+	Intermediates []string
+	NReduce       int
 }
 
 // Cook up a unique-ish UNIX-domain socket name

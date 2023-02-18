@@ -11,15 +11,20 @@ import (
 )
 
 type MapTask struct {
-	id      int
-	file    string //入力のファイル名
-	done    bool
-	nReduce int
+	id   int
+	file string //入力のファイル名
+}
+
+type ReduceTask struct {
+	id    int
+	files []string
 }
 
 type Coordinator struct {
-	mtx      sync.Mutex
-	mapTasks []MapTask
+	mtx         sync.Mutex
+	nReduce     int
+	mapTasks    []MapTask
+	reduceTasks []ReduceTask
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -36,7 +41,16 @@ func (c *Coordinator) GetTask(args *ExampleArgs, reply *MRTask) error {
 		reply.Type = Map
 		reply.File = task.file
 		reply.Id = task.id
-		reply.NReduce = task.nReduce
+		reply.NReduce = c.nReduce
+	} else if len(c.mapTasks) == 0 && len(c.reduceTasks) > 0 {
+		task := c.reduceTasks[0]
+		c.reduceTasks = c.reduceTasks[1:]
+
+		reply.Type = Reduce
+		reply.Intermediates = task.files
+
+		reply.Id = task.id
+		reply.NReduce = c.nReduce
 	}
 	c.mtx.Unlock()
 	return nil
@@ -68,24 +82,35 @@ func (c *Coordinator) server() {
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
-	ret := len(c.mapTasks) == 0
+	ret := len(c.mapTasks) == 0 && len(c.reduceTasks) == 0
 
 	// Your code here.
-
 	return ret
 }
 
 // create a Coordinator.
 // main/mrcoordinator.go calls this function.
 // nReduce is the number of reduce tasks to use.
-func MakeCoordinator(inputFiles []string, nReduce int) *Coordinator {
+func MakeCoordinator(inputFiles []string, n int) *Coordinator {
 	c := Coordinator{
-		mapTasks: make([]MapTask, len(inputFiles)),
+		mapTasks:    make([]MapTask, len(inputFiles)),
+		reduceTasks: make([]ReduceTask, n),
 	}
 
 	// Your code here.
+	c.nReduce = n
+
 	for i, f := range inputFiles {
-		c.mapTasks[i] = MapTask{id: i, file: f, done: false, nReduce: 10}
+		c.mapTasks[i] = MapTask{id: i, file: f}
+	}
+
+	for r := 0; r < n; r++ {
+		fs := make([]string, 0, len(inputFiles))
+		for m := range inputFiles {
+			fileName := fmt.Sprintf("mr-%d-%d", m, r)
+			fs = append(fs, fileName)
+		}
+		c.reduceTasks[r] = ReduceTask{id: r, files: fs}
 	}
 
 	c.server()

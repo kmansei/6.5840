@@ -8,7 +8,7 @@ import (
 	"log"
 	"net/rpc"
 	"os"
-	"time"
+	"sort"
 )
 
 // Map functions return a slice of KeyValue.
@@ -16,6 +16,14 @@ type KeyValue struct {
 	Key   string
 	Value string
 }
+
+// for sorting by key.
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
@@ -33,9 +41,9 @@ func Worker(mapf func(string, string) []KeyValue,
 	for {
 		reply := CallGetTask()
 
-		fmt.Println(reply.File)
-
 		if reply.Type == Map {
+			fmt.Println(reply.File)
+
 			file, err := os.Open(reply.File)
 			if err != nil {
 				log.Fatalf("cannot open %v for map task", reply.File)
@@ -69,9 +77,56 @@ func Worker(mapf func(string, string) []KeyValue,
 
 				ofile.Close()
 			}
+		} else if reply.Type == Reduce {
+			fmt.Printf("Reduce Id: %d\n", reply.Id)
+			fmt.Println(reply.Intermediates)
+
+			intermediate := []KeyValue{}
+			for _, f := range reply.Intermediates {
+				fmt.Println(f)
+				file, err := os.Open(f)
+
+				if err != nil {
+					log.Fatalf("cannot open %v for reduce task", f)
+				}
+
+				dec := json.NewDecoder(file)
+				for {
+					var kv KeyValue
+					if err := dec.Decode(&kv); err != nil {
+						break
+					}
+					intermediate = append(intermediate, kv)
+				}
+			}
+
+			sort.Sort(ByKey(intermediate))
+
+			oname := fmt.Sprintf("mr-out-%d", reply.Id)
+			ofile, _ := os.Create(oname)
+
+			i := 0
+			for i < len(intermediate) {
+				j := i + 1
+				for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
+					j++
+				}
+				values := []string{}
+				for k := i; k < j; k++ {
+					values = append(values, intermediate[k].Value)
+				}
+				output := reducef(intermediate[i].Key, values)
+
+				// this is the correct format for each line of Reduce output.
+				fmt.Fprintf(ofile, "%v %v\n", intermediate[i].Key, output)
+
+				i = j
+			}
+
 		}
-		fmt.Println("sleeping...")
-		time.Sleep(500 * time.Millisecond)
+
+		//fmt.Println("sleeping...")
+		//time.Sleep(500 * time.Millisecond)
 	}
 
 	// uncomment to send the Example RPC to the coordinator.
