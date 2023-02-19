@@ -32,6 +32,7 @@ const (
 	REDUCE
 	SLEEP
 	INIT
+	EXIT
 )
 
 type MRTask struct {

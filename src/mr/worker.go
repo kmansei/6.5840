@@ -38,24 +38,26 @@ func ihash(key string) int {
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
-	// Your worker implementation here.
+	//タスクの初期状態
 	args := MRTask{Type: INIT}
 
 	for {
 		reply := CallGetTask(&args)
 
-		if reply.Type == MAP {
-			fmt.Println(reply.File)
+		//fmt.Println(reply.Type)
+		//fmt.Println(reply.File)
 
+		switch reply.Type {
+		case MAP:
 			file, err := os.Open(reply.File)
 			if err != nil {
 				log.Fatalf("cannot open %v for map task", reply.File)
 			}
+			defer file.Close()
 			content, err := ioutil.ReadAll(file)
 			if err != nil {
 				log.Fatalf("cannot read %v for map task", reply.File)
 			}
-			file.Close()
 			kva := mapf(reply.File, string(content))
 
 			//nReduce個に分散された中間ファイル
@@ -69,6 +71,8 @@ func Worker(mapf func(string, string) []KeyValue,
 				fname := fmt.Sprintf("mr-%d-%d", reply.Id, reduceid)
 
 				ofile, _ := os.Create(fname)
+				defer ofile.Close()
+
 				enc := json.NewEncoder(ofile)
 
 				for _, kv := range kvarr {
@@ -78,21 +82,18 @@ func Worker(mapf func(string, string) []KeyValue,
 					}
 				}
 
-				ofile.Close()
 			}
 			args = MRTask{Type: MAP, Id: reply.Id}
-		} else if reply.Type == REDUCE {
-			fmt.Printf("Reduce Id: %d\n", reply.Id)
-			fmt.Println(reply.Intermediates)
-
+		case REDUCE:
 			intermediate := []KeyValue{}
+			fmt.Println(reply.Intermediates)
 			for _, f := range reply.Intermediates {
-				fmt.Println(f)
 				file, err := os.Open(f)
 
 				if err != nil {
 					log.Fatalf("cannot open %v for reduce task", f)
 				}
+				defer file.Close()
 
 				dec := json.NewDecoder(file)
 				for {
@@ -108,6 +109,7 @@ func Worker(mapf func(string, string) []KeyValue,
 
 			oname := fmt.Sprintf("mr-out-%d", reply.Id)
 			ofile, _ := os.Create(oname)
+			defer ofile.Close()
 
 			i := 0
 			for i < len(intermediate) {
@@ -127,15 +129,16 @@ func Worker(mapf func(string, string) []KeyValue,
 				i = j
 			}
 			args = MRTask{Type: REDUCE, Id: reply.Id}
-		} else if reply.Type == SLEEP {
-			fmt.Println("sleeping...")
+		case SLEEP:
 			time.Sleep(500 * time.Millisecond)
+			args = MRTask{Type: SLEEP}
+		case EXIT:
+			return
 		}
 	}
 
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
-
 }
 
 func CallGetTask(args *MRTask) MRTask {
@@ -190,11 +193,8 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 
 	err = c.Call(rpcname, args, reply)
 	if err == nil {
-		fmt.Println("err == nil")
 		return true
 	}
-	fmt.Println("err != nil")
-
 	fmt.Println(err)
 	return false
 }
