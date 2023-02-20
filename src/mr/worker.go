@@ -44,21 +44,18 @@ func Worker(mapf func(string, string) []KeyValue,
 	for {
 		reply := CallGetTask(&args)
 
-		//fmt.Println(reply.Type)
-		//fmt.Println(reply.File)
-
 		switch reply.Type {
 		case MAP:
 			file, err := os.Open(reply.File)
 			if err != nil {
 				log.Fatalf("cannot open %v for map task", reply.File)
 			}
-			defer file.Close()
 			content, err := ioutil.ReadAll(file)
 			if err != nil {
 				log.Fatalf("cannot read %v for map task", reply.File)
 			}
 			kva := mapf(reply.File, string(content))
+			file.Close()
 
 			//nReduce個に分散された中間ファイル
 			intermediate := make(map[int][]KeyValue)
@@ -67,33 +64,40 @@ func Worker(mapf func(string, string) []KeyValue,
 				intermediate[i] = append(intermediate[i], kv)
 			}
 
-			for reduceid, kvarr := range intermediate {
-				fname := fmt.Sprintf("mr-%d-%d", reply.Id, reduceid)
+			reduceFiles := make([]string, 0, reply.NReduce)
 
-				ofile, _ := os.Create(fname)
-				defer ofile.Close()
-
+			for reduceid, kvs := range intermediate {
+				tempfname := fmt.Sprintf("temp-%d-mr-%d-%d", os.Getpid(), reply.Id, reduceid)
+				ofile, _ := os.Create(tempfname)
 				enc := json.NewEncoder(ofile)
-
-				for _, kv := range kvarr {
+				for _, kv := range kvs {
 					err := enc.Encode(&kv)
 					if err != nil {
 						log.Fatal(err)
 					}
 				}
 
+				//To ensure that nobody observes partially written files in the presence of crashes
+				fname := fmt.Sprintf("mr-%d-%d", reply.Id, reduceid)
+				err := os.Rename(tempfname, fname)
+				if err != nil {
+					log.Fatalf("cannot rename intermediate file")
+				}
+
+				//reduce対象となるファイル名を記録
+				reduceFiles = append(reduceFiles, fname)
+
+				ofile.Close()
 			}
-			args = MRTask{Type: MAP, Id: reply.Id}
+			args = MRTask{Type: MAP, Id: reply.Id, Intermediates: reduceFiles}
 		case REDUCE:
 			intermediate := []KeyValue{}
-			fmt.Println(reply.Intermediates)
 			for _, f := range reply.Intermediates {
 				file, err := os.Open(f)
 
 				if err != nil {
 					log.Fatalf("cannot open %v for reduce task", f)
 				}
-				defer file.Close()
 
 				dec := json.NewDecoder(file)
 				for {
@@ -103,12 +107,13 @@ func Worker(mapf func(string, string) []KeyValue,
 					}
 					intermediate = append(intermediate, kv)
 				}
+				file.Close()
 			}
 
 			sort.Sort(ByKey(intermediate))
 
-			oname := fmt.Sprintf("mr-out-%d", reply.Id)
-			ofile, _ := os.Create(oname)
+			tempname := fmt.Sprintf("temp-%d-mr-out-%d", os.Getpid(), reply.Id)
+			ofile, _ := os.Create(tempname)
 			defer ofile.Close()
 
 			i := 0
@@ -128,6 +133,14 @@ func Worker(mapf func(string, string) []KeyValue,
 
 				i = j
 			}
+
+			//To ensure that nobody observes partially written files in the presence of crashes
+			oname := fmt.Sprintf("mr-out-%d", reply.Id)
+			err := os.Rename(tempname, oname)
+			if err != nil {
+				log.Fatalf("cannot rename output file")
+			}
+
 			args = MRTask{Type: REDUCE, Id: reply.Id}
 		case SLEEP:
 			time.Sleep(500 * time.Millisecond)

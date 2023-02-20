@@ -7,7 +7,10 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
+	"time"
 )
 
 type TaskStatus int
@@ -22,12 +25,14 @@ type MapTask struct {
 	id     int
 	file   string //入力のファイル名
 	status TaskStatus
+	Start  time.Time
 }
 
 type ReduceTask struct {
 	id     int
 	files  []string
 	status TaskStatus
+	Start  time.Time
 }
 
 type Coordinator struct {
@@ -44,24 +49,42 @@ func (c *Coordinator) GetTask(args *MRTask, reply *MRTask) error {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 
-	//fmt.Println(c.reduceTasks)
-
 	//前回workerが行ったタスクをdoneにする
 	if args.Type == MAP {
-		c.mapTasks[args.Id].status = DONE
-		c.mapRemain--
+
+		//backupで複数のworkerに同じタスクをさせた場合は初回のみ完了処理をする
+		if c.mapTasks[args.Id].status == EXECUTING {
+			c.mapTasks[args.Id].status = DONE
+			c.mapRemain--
+
+			//reduce対象のファイルをセット
+			for _, filename := range args.Intermediates {
+				reduceId, err := strconv.Atoi(strings.Split(filename, "-")[2]) //assume "mr-{mapid}-{reduceid}"
+				if err != nil {
+					fmt.Println("Error during conversion")
+					return nil
+				}
+				c.reduceTasks[reduceId].files = append(c.reduceTasks[reduceId].files, filename)
+			}
+		}
 	} else if args.Type == REDUCE {
-		c.reduceTasks[args.Id].status = DONE
-		c.reduceRemain--
+		if c.reduceTasks[args.Id].status == EXECUTING {
+			c.reduceTasks[args.Id].status = DONE
+			c.reduceRemain--
+		}
 	}
 
 	if c.mapRemain > 0 { //map phase
 		for _, task := range c.mapTasks {
-			if task.status == UNDONE {
+			due := task.Start.Add(10 * time.Second)
+			//未着手または時間切れのタスク
+			if task.status == UNDONE || (task.status == EXECUTING && time.Now().After(due)) {
 				reply.Type = MAP
 				reply.File = task.file
 				reply.Id = task.id
 				reply.NReduce = c.nReduce
+
+				c.mapTasks[task.id].Start = time.Now()
 				c.mapTasks[task.id].status = EXECUTING
 				return nil
 			}
@@ -70,10 +93,13 @@ func (c *Coordinator) GetTask(args *MRTask, reply *MRTask) error {
 		reply.Type = SLEEP
 	} else if c.mapRemain == 0 && c.reduceRemain > 0 { //reduce phase
 		for _, task := range c.reduceTasks {
-			if task.status == UNDONE {
+			due := task.Start.Add(10 * time.Second)
+			if task.status == UNDONE || (task.status == EXECUTING && time.Now().After(due)) {
 				reply.Type = REDUCE
 				reply.Intermediates = task.files
 				reply.Id = task.id
+
+				c.reduceTasks[task.id].Start = time.Now()
 				c.reduceTasks[task.id].status = EXECUTING
 				return nil
 			}
@@ -131,12 +157,7 @@ func MakeCoordinator(inputFiles []string, n int) *Coordinator {
 	}
 
 	for r := 0; r < n; r++ {
-		fs := make([]string, 0, len(inputFiles))
-		for m := range inputFiles {
-			fileName := fmt.Sprintf("mr-%d-%d", m, r)
-			fs = append(fs, fileName)
-		}
-		c.reduceTasks[r] = ReduceTask{id: r, files: fs, status: UNDONE}
+		c.reduceTasks[r] = ReduceTask{id: r, status: UNDONE}
 	}
 
 	c.server()

@@ -38,8 +38,8 @@ const (
 type MRTask struct {
 	Type          TaskType //Coordinatorにasignされたタスクタイプ
 	Id            int      //map or reduceのtask id
-	File          string
-	Intermediates []string
+	File          string   //map対象のファイル
+	Intermediates []string //reduce対象のファイルs
 	NReduce       int
 }
 
