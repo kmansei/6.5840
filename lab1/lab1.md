@@ -1,6 +1,27 @@
 # 課題
 https://pdos.csail.mit.edu/6.824/labs/lab-mr.html
 
+## 実装
+エントリーポイント
+
+coordinator
+```
+$ rm mr-out*
+$ go run mrcoordinator.go pg-*.txt
+```
+
+worker
+```
+$ rm mr-out*
+$ go run mrcoordinator.go pg-*.txt
+```
+
+- [mrcoordinator.go](https://github.com/kmansei/6.5840/blob/master/src/main/mrsequential.go)
+- [mrworker.go](https://github.com/kmansei/6.5840/blob/master/src/main/mrworker.go)
+- [mr/rpc.go](https://github.com/kmansei/6.5840/blob/master/src/mr/rpc.go)
+- [mr/coordinator.go](https://github.com/kmansei/6.5840/blob/master/src/mr/coordinator.go)
+- [mr/worker.go](https://github.com/kmansei/6.5840/blob/master/src/mr/worker.go)
+
 ## 設計
 <div align="center">
 <figure>
